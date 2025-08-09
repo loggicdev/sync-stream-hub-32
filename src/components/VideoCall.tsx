@@ -8,12 +8,13 @@ import { PhoneOff, Mic, MicOff, Video, VideoOff, Users, Copy } from 'lucide-reac
 import { useState } from 'react';
 
 interface VideoCallProps {
+  roomId: string;
   roomCode: string;
   userName: string;
   onLeave: () => void;
 }
 
-export const VideoCall = ({ roomCode, userName, onLeave }: VideoCallProps) => {
+export const VideoCall = ({ roomId, roomCode, userName, onLeave }: VideoCallProps) => {
   const { toast } = useToast();
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
@@ -29,7 +30,7 @@ export const VideoCall = ({ roomCode, userName, onLeave }: VideoCallProps) => {
     localVideoRef,
     joinRoom,
     leaveRoom
-  } = useWebRTC(roomCode, userName, peerId.current);
+  } = useWebRTC(roomId, userName, peerId.current);
 
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
 
@@ -45,7 +46,7 @@ export const VideoCall = ({ roomCode, userName, onLeave }: VideoCallProps) => {
     return () => {
       leaveRoom();
     };
-  }, [joinRoom, leaveRoom, toast]);
+  }, [joinRoom, leaveRoom]);
 
   // Update remote video elements when streams change
   useEffect(() => {

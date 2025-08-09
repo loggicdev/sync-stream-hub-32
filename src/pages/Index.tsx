@@ -65,6 +65,7 @@ const Index = () => {
   if (currentRoom) {
     return (
       <VideoCall
+        roomId={currentRoom.roomId}
         roomCode={currentRoom.roomCode}
         userName={currentRoom.userName}
         onLeave={handleLeaveRoom}
