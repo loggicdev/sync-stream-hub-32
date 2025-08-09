@@ -19,8 +19,11 @@ export const VideoCall = ({ roomId, roomCode, userName, onLeave }: VideoCallProp
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   
-  // Generate a unique peer ID for this session
-  const peerId = useRef(`${userName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+  // Generate a stable unique peer ID for this session
+  const peerId = useRef<string>();
+  if (!peerId.current) {
+    peerId.current = `${userName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
   
   const {
     participants,
@@ -46,7 +49,21 @@ export const VideoCall = ({ roomId, roomCode, userName, onLeave }: VideoCallProp
     return () => {
       leaveRoom();
     };
-  }, [joinRoom, leaveRoom]);
+  }, []); // Remove dependências para evitar loop
+
+  // Assign stream to video element when available
+  useEffect(() => {
+    if (localStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  // Assign stream when video element becomes available
+  useEffect(() => {
+    if (isConnected && localStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [isConnected, localStream]);
 
   // Update remote video elements when streams change
   useEffect(() => {

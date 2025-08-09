@@ -21,12 +21,24 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidate[]>>(new Map());
+
+  // Refs para controlar canais e evitar resubscribe em loop
+  const participantsChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const signalingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const subscribedKeyRef = useRef<string | null>(null);
 
   const iceServers = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' }
+    // TURN server temporariamente desabilitado para evitar erro de autenticação
+    // {
+    //   urls: 'turn:168.138.132.175:3478',
+    //   username: 'user',
+    //   credential: '505e68ee1b35c83a2ef5dec77d5d8631'
+    // }
   ];
 
   // Initialize local media
@@ -36,13 +48,12 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
         video: { width: 1280, height: 720 },
         audio: true
       });
+      
+      localStreamRef.current = stream;
       setLocalStream(stream);
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
       return stream;
     } catch (error) {
-      console.error('Error accessing media devices:', error);
+      console.error('[useWebRTC] Error accessing media devices:', error);
       throw error;
     }
   }, []);
@@ -100,84 +111,7 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
 
     peerConnectionsRef.current.set(targetPeerId, pc);
     return pc;
-  }, [roomId, peerId]);
-
-  // Send offer to peer
-  const sendOffer = useCallback(async (targetPeerId: string, stream: MediaStream) => {
-    const pc = createPeerConnection(targetPeerId, stream);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    await supabase
-      .from('signaling')
-      .insert({
-        room_id: roomId,
-        from_peer_id: peerId,
-        to_peer_id: targetPeerId,
-        signal_type: 'offer',
-        signal_data: { type: 'offer', sdp: offer.sdp }
-      });
-  }, [createPeerConnection, roomId, peerId]);
-
-  // Handle incoming offer
-  const handleOffer = useCallback(async (fromPeerId: string, signalData: SignalData, stream: MediaStream) => {
-    const pc = createPeerConnection(fromPeerId, stream);
-    await pc.setRemoteDescription(new RTCSessionDescription({
-      type: signalData.type as RTCSdpType,
-      sdp: signalData.sdp
-    }));
-    
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    await supabase
-      .from('signaling')
-      .insert({
-        room_id: roomId,
-        from_peer_id: peerId,
-        to_peer_id: fromPeerId,
-        signal_type: 'answer',
-        signal_data: { type: 'answer', sdp: answer.sdp }
-      });
-
-    // Process any pending candidates
-    const pendingCandidates = pendingCandidatesRef.current.get(fromPeerId) || [];
-    for (const candidate of pendingCandidates) {
-      await pc.addIceCandidate(candidate);
-    }
-    pendingCandidatesRef.current.delete(fromPeerId);
-  }, [createPeerConnection, roomId, peerId]);
-
-  // Handle incoming answer
-  const handleAnswer = useCallback(async (fromPeerId: string, signalData: SignalData) => {
-    const pc = peerConnectionsRef.current.get(fromPeerId);
-    if (pc) {
-      await pc.setRemoteDescription(new RTCSessionDescription({
-        type: signalData.type as RTCSdpType,
-        sdp: signalData.sdp
-      }));
-      
-      // Process any pending candidates
-      const pendingCandidates = pendingCandidatesRef.current.get(fromPeerId) || [];
-      for (const candidate of pendingCandidates) {
-        await pc.addIceCandidate(candidate);
-      }
-      pendingCandidatesRef.current.delete(fromPeerId);
-    }
-  }, []);
-
-  // Handle ICE candidate
-  const handleIceCandidate = useCallback(async (fromPeerId: string, signalData: SignalData) => {
-    const pc = peerConnectionsRef.current.get(fromPeerId);
-    if (pc && pc.remoteDescription && signalData.candidate) {
-      await pc.addIceCandidate(new RTCIceCandidate(signalData.candidate));
-    } else if (signalData.candidate) {
-      // Store candidates for later if remote description isn't set yet
-      const pending = pendingCandidatesRef.current.get(fromPeerId) || [];
-      pending.push(new RTCIceCandidate(signalData.candidate));
-      pendingCandidatesRef.current.set(fromPeerId, pending);
-    }
-  }, []);
+  }, [roomId, peerId]); // Removida dependência iceServers
 
   // Join room
   const joinRoom = useCallback(async () => {
@@ -206,14 +140,26 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
 
       if (existingParticipants) {
         for (const participant of existingParticipants) {
-          await sendOffer(participant.peer_id, stream);
+          const pc = createPeerConnection(participant.peer_id, stream);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          await supabase
+            .from('signaling')
+            .insert({
+              room_id: roomId,
+              from_peer_id: peerId,
+              to_peer_id: participant.peer_id,
+              signal_type: 'offer',
+              signal_data: { type: 'offer', sdp: offer.sdp }
+            });
         }
       }
     } catch (error) {
       console.error('Error joining room:', error);
       throw error;
     }
-  }, [roomId, userName, peerId, initializeMedia, sendOffer]);
+  }, [roomId, userName, peerId]); // Apenas dependências essenciais
 
   // Leave room
   const leaveRoom = useCallback(async () => {
@@ -222,9 +168,11 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
     peerConnectionsRef.current.clear();
 
     // Stop local stream
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+    const currentStream = localStreamRef.current;
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => track.stop());
     }
+    localStreamRef.current = null;
 
     // Remove from participants
     await supabase
@@ -233,14 +181,94 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
       .eq('room_id', roomId)
       .eq('peer_id', peerId);
 
+    // Remover canais explicitamente ao sair
+    if (participantsChannelRef.current) {
+      supabase.removeChannel(participantsChannelRef.current);
+      participantsChannelRef.current = null;
+    }
+    if (signalingChannelRef.current) {
+      supabase.removeChannel(signalingChannelRef.current);
+      signalingChannelRef.current = null;
+    }
+    subscribedKeyRef.current = null;
+
     setIsConnected(false);
     setLocalStream(null);
     setRemoteStreams(new Map());
-  }, [roomId, peerId, localStream]);
+  }, [roomId, peerId]); // Removida dependência localStream
 
   // Set up realtime subscriptions
   useEffect(() => {
-    if (!isConnected || !localStream) return;
+    if (!isConnected) return;
+
+    const currentKey = `${roomId}:${peerId}`;
+    if (subscribedKeyRef.current === currentKey && participantsChannelRef.current && signalingChannelRef.current) {
+      console.log('[useWebRTC] Already subscribed for key:', currentKey);
+      return;
+    }
+
+    // Se existir uma subscrição anterior de outra sala/peer, remover primeiro
+    if (subscribedKeyRef.current && subscribedKeyRef.current !== currentKey) {
+      console.log('[useWebRTC] Cleaning previous subscription for key:', subscribedKeyRef.current);
+      if (participantsChannelRef.current) supabase.removeChannel(participantsChannelRef.current);
+      if (signalingChannelRef.current) supabase.removeChannel(signalingChannelRef.current);
+      participantsChannelRef.current = null;
+      signalingChannelRef.current = null;
+      subscribedKeyRef.current = null;
+    }
+
+    console.log('[useWebRTC] Subscribing to channels for room:', roomId, 'peer:', peerId);
+
+    // Create stable peer connection function inside effect
+    const createStablePeerConnection = (targetPeerId: string, stream: MediaStream) => {
+      const pc = new RTCPeerConnection({ iceServers });
+
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
+      });
+
+      pc.ontrack = (event) => {
+        const [remoteStream] = event.streams;
+        setRemoteStreams(prev => new Map(prev.set(targetPeerId, remoteStream)));
+      };
+
+      pc.onicecandidate = async (event) => {
+        if (event.candidate) {
+          await supabase
+            .from('signaling')
+            .insert({
+              room_id: roomId,
+              from_peer_id: peerId,
+              to_peer_id: targetPeerId,
+              signal_type: 'ice-candidate',
+              signal_data: { 
+                candidate: {
+                  candidate: event.candidate.candidate,
+                  sdpMLineIndex: event.candidate.sdpMLineIndex,
+                  sdpMid: event.candidate.sdpMid,
+                  usernameFragment: event.candidate.usernameFragment
+                }
+              }
+            });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') {
+          console.log(`Connected to peer: ${targetPeerId}`);
+        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+          console.log(`Disconnected from peer: ${targetPeerId}`);
+          setRemoteStreams(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(targetPeerId);
+            return newMap;
+          });
+        }
+      };
+
+      peerConnectionsRef.current.set(targetPeerId, pc);
+      return pc;
+    };
 
     // Listen for new participants
     const participantsChannel = supabase
@@ -248,6 +276,7 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
       .on('postgres_changes', 
         { event: 'INSERT', schema: 'public', table: 'participants', filter: `room_id=eq.${roomId}` },
         async (payload) => {
+          console.log('[useWebRTC] INSERT participant payload:', payload);
           const newParticipant = payload.new as Participant;
           if (newParticipant.peer_id !== peerId) {
             setParticipants(prev => [...prev, newParticipant]);
@@ -257,6 +286,7 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
       .on('postgres_changes',
         { event: 'DELETE', schema: 'public', table: 'participants', filter: `room_id=eq.${roomId}` },
         (payload) => {
+          console.log('[useWebRTC] DELETE participant payload:', payload);
           const deletedParticipant = payload.old as Participant;
           setParticipants(prev => prev.filter(p => p.peer_id !== deletedParticipant.peer_id));
           
@@ -266,52 +296,140 @@ export const useWebRTC = (roomId: string, userName: string, peerId: string) => {
             pc.close();
             peerConnectionsRef.current.delete(deletedParticipant.peer_id);
           }
-          
-          // Remove remote stream
           setRemoteStreams(prev => {
             const newMap = new Map(prev);
             newMap.delete(deletedParticipant.peer_id);
             return newMap;
           });
         }
-      )
-      .subscribe();
+      );
 
-    // Listen for signaling messages
     const signalingChannel = supabase
       .channel('signaling')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'signaling', filter: `room_id=eq.${roomId}` },
         async (payload) => {
+          console.log('[useWebRTC] INSERT signaling payload:', payload);
           const signal = payload.new as any;
-          
-          // Only process signals meant for this peer
           if (signal.to_peer_id === peerId || !signal.to_peer_id) {
             const { from_peer_id, signal_type, signal_data } = signal;
-            
-            if (from_peer_id === peerId) return; // Ignore own signals
-            
             switch (signal_type) {
-              case 'offer':
-                await handleOffer(from_peer_id, signal_data, localStream);
+              case 'offer': {
+                const currentStream = localStreamRef.current;
+                if (!currentStream) {
+                  console.error('[useWebRTC] No local stream available for offer handling');
+                  return;
+                }
+                const pc = createStablePeerConnection(from_peer_id, currentStream);
+                await pc.setRemoteDescription(new RTCSessionDescription({
+                  type: signal_data.type as RTCSdpType,
+                  sdp: signal_data.sdp
+                }));
+                
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+
+                await supabase
+                  .from('signaling')
+                  .insert({
+                    room_id: roomId,
+                    from_peer_id: peerId,
+                    to_peer_id: from_peer_id,
+                    signal_type: 'answer',
+                    signal_data: { type: 'answer', sdp: answer.sdp }
+                  });
+
+                // Process any pending candidates
+                const pendingCandidates = pendingCandidatesRef.current.get(from_peer_id) || [];
+                for (const candidate of pendingCandidates) {
+                  await pc.addIceCandidate(candidate);
+                }
+                pendingCandidatesRef.current.delete(from_peer_id);
                 break;
-              case 'answer':
-                await handleAnswer(from_peer_id, signal_data);
+              }
+              case 'answer': {
+                const pc = peerConnectionsRef.current.get(from_peer_id);
+                if (pc) {
+                  await pc.setRemoteDescription(new RTCSessionDescription({
+                    type: signal_data.type as RTCSdpType,
+                    sdp: signal_data.sdp
+                  }));
+                  
+                  // Process any pending candidates
+                  const pendingCandidates = pendingCandidatesRef.current.get(from_peer_id) || [];
+                  for (const candidate of pendingCandidates) {
+                    await pc.addIceCandidate(candidate);
+                  }
+                  pendingCandidatesRef.current.delete(from_peer_id);
+                }
                 break;
-              case 'ice-candidate':
-                await handleIceCandidate(from_peer_id, signal_data);
+              }
+              case 'ice-candidate': {
+                const pc = peerConnectionsRef.current.get(from_peer_id);
+                if (pc && pc.remoteDescription && signal_data.candidate) {
+                  await pc.addIceCandidate(new RTCIceCandidate(signal_data.candidate));
+                } else if (signal_data.candidate) {
+                  // Store candidates for later if remote description isn't set yet
+                  const pending = pendingCandidatesRef.current.get(from_peer_id) || [];
+                  pending.push(new RTCIceCandidate(signal_data.candidate));
+                  pendingCandidatesRef.current.set(from_peer_id, pending);
+                }
                 break;
+              }
+              default: {
+                console.warn('[useWebRTC] Unknown signal type:', signal_type);
+              }
             }
           }
         }
-      )
-      .subscribe();
+      );
 
+    participantsChannelRef.current = participantsChannel;
+    signalingChannelRef.current = signalingChannel;
+    subscribedKeyRef.current = currentKey;
+
+    // Assinar os canais (status logs para debug)
+    participantsChannel.subscribe((status) => {
+      console.log('[useWebRTC] participants channel status:', status);
+      if (participantsChannel.state === 'closed') {
+        console.error('[useWebRTC] Canal de participantes fechado. Verifique a conexão WebSocket do Supabase Realtime.');
+      }
+    });
+    signalingChannel.subscribe((status) => {
+      console.log('[useWebRTC] signaling channel status:', status);
+      if (signalingChannel.state === 'closed') {
+        console.error('[useWebRTC] Canal de signaling fechado. Verifique a conexão WebSocket do Supabase Realtime.');
+      }
+    });
+
+    // Buscar participantes iniciais de forma assíncrona
+    (async () => {
+      const { data: initialParticipants, error: initialErr } = await supabase
+        .from('participants')
+        .select('*')
+        .eq('room_id', roomId)
+        .eq('is_active', true);
+      if (initialErr) {
+        console.error('[useWebRTC] Error fetching initial participants:', initialErr);
+      } else if (initialParticipants) {
+        setParticipants(initialParticipants);
+      }
+    })();
+
+    // Cleanup ao desmontar ou trocar dependências
     return () => {
-      supabase.removeChannel(participantsChannel);
-      supabase.removeChannel(signalingChannel);
+      console.log('[useWebRTC] Cleanup - removing channels for room:', roomId, 'peer:', peerId);
+      if (participantsChannelRef.current) {
+        supabase.removeChannel(participantsChannelRef.current);
+        participantsChannelRef.current = null;
+      }
+      if (signalingChannelRef.current) {
+        supabase.removeChannel(signalingChannelRef.current);
+        signalingChannelRef.current = null;
+      }
+      subscribedKeyRef.current = null;
     };
-  }, [isConnected, localStream, roomId, peerId, handleOffer, handleAnswer, handleIceCandidate]);
+  }, [isConnected, roomId, peerId]); // Removida dependência localStream
 
   return {
     participants,
