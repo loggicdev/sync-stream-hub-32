@@ -1,6 +1,4 @@
 meet.live.claudy.host {
-  reverse_proxy /api/* 127.0.0.1:4000
-  reverse_proxy /api 127.0.0.1:4000
   root * /app/dist
   file_server
 }
