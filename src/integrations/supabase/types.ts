@@ -14,13 +14,109 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      participants: {
+        Row: {
+          id: string
+          is_active: boolean | null
+          joined_at: string
+          peer_id: string
+          room_id: string
+          user_name: string
+        }
+        Insert: {
+          id?: string
+          is_active?: boolean | null
+          joined_at?: string
+          peer_id: string
+          room_id: string
+          user_name: string
+        }
+        Update: {
+          id?: string
+          is_active?: boolean | null
+          joined_at?: string
+          peer_id?: string
+          room_id?: string
+          user_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "participants_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rooms: {
+        Row: {
+          created_at: string
+          id: string
+          room_code: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          room_code: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          room_code?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      signaling: {
+        Row: {
+          created_at: string
+          from_peer_id: string
+          id: string
+          room_id: string
+          signal_data: Json
+          signal_type: string
+          to_peer_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          from_peer_id: string
+          id?: string
+          room_id: string
+          signal_data: Json
+          signal_type: string
+          to_peer_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          from_peer_id?: string
+          id?: string
+          room_id?: string
+          signal_data?: Json
+          signal_type?: string
+          to_peer_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "signaling_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      cleanup_old_signals: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
