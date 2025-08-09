@@ -1,6 +1,6 @@
 module.exports = {
   // Configuração do Dokploy
-  port: 4000,
+  port: process.env.PORT || 80,
   buildCommand: "npm run build",
   startCommand: "npm run start",
   healthCheck: "/",

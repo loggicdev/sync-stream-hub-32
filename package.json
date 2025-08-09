@@ -9,7 +9,7 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "serve -s dist -l 4000",
+    "start": "serve -s dist -l ${PORT:-80} --single",
     "serve": "serve -s dist"
   },
   "dependencies": {
